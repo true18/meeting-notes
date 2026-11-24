@@ -84,8 +84,12 @@ func (s *Store) Save(ctx context.Context, source string) (SavedFile, error) {
 		}
 	}()
 
-	if err := copyContext(ctx, temp, sourceFile); err != nil {
+	limited := &io.LimitedReader{R: sourceFile, N: s.maxSize + 1}
+	if err := copyContext(ctx, temp, limited); err != nil {
 		return SavedFile{}, fmt.Errorf("copy upload: %w", err)
+	}
+	if limited.N == 0 {
+		return SavedFile{}, ErrFileTooLarge
 	}
 	if err := temp.Sync(); err != nil {
 		return SavedFile{}, fmt.Errorf("sync upload: %w", err)

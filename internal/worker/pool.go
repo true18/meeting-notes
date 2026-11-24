@@ -59,7 +59,7 @@ func (p *Pool) Run(ctx context.Context) error {
 	if p.config.Workers < 1 {
 		return errors.New("worker count must be greater than zero")
 	}
-	cutoff := time.Now().Add(-p.config.ProcessingTimeout)
+	cutoff := time.Now().Add(-(p.config.ProcessingTimeout + p.config.CleanupTimeout))
 	recovered, err := p.repo.RecoverStaleTasks(ctx, cutoff)
 	if err != nil {
 		return fmt.Errorf("recover stale tasks: %w", err)

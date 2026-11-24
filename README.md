@@ -165,6 +165,8 @@ export TEST_DATABASE_DSN='postgres://postgres:postgres@localhost:5432/meeting_no
 go test -v ./internal/repository/postgres
 ```
 
+Для PostgreSQL из `compose.yaml` тестовую базу можно один раз создать командой `docker compose exec postgres createdb -U postgres meeting_notes_test`.
+
 Если `TEST_DATABASE_DSN` отсутствует, тест явно пропускается. Не направляйте его на production-базу. Unit-тесты проверяют ошибки клиентов, отмену, файловую очистку, CLI-коды и лимит worker concurrency; integration-тест проверяет транзакции, статусы, поиск и изоляцию пользователей.
 
 ## Возможные улучшения
