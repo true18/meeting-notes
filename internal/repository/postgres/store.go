@@ -179,14 +179,14 @@ func (s *Store) GetSummary(ctx context.Context, userID, meetingID int64) (string
 func (s *Store) Search(ctx context.Context, userID int64, query string, limit int) ([]domain.SearchResult, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT m.id, m.title, t.status, m.created_at,
-		       ts_headline('simple', tr.text, plainto_tsquery('simple', $2), 'MaxFragments=2,MinWords=4,MaxWords=24')
+		       ts_headline('russian', tr.text, plainto_tsquery('russian', $2), 'MaxFragments=2,MinWords=4,MaxWords=24')
 		FROM meetings m
 		JOIN processing_tasks t ON t.meeting_id = m.id
 		JOIN transcripts tr ON tr.meeting_id = m.id
 		LEFT JOIN summaries s ON s.meeting_id = m.id
 		WHERE m.user_id = $1
-		  AND (to_tsvector('simple', tr.text) @@ plainto_tsquery('simple', $2)
-		       OR to_tsvector('simple', COALESCE(s.text, '')) @@ plainto_tsquery('simple', $2))
+		  AND (to_tsvector('russian', tr.text) @@ plainto_tsquery('russian', $2)
+		       OR to_tsvector('russian', COALESCE(s.text, '')) @@ plainto_tsquery('russian', $2))
 		ORDER BY m.created_at DESC, m.id DESC
 		LIMIT $3`, userID, query, limit)
 	if err != nil {

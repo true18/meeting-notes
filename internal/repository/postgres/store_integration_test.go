@@ -57,7 +57,7 @@ func TestPostgresLifecycleAndIsolation(t *testing.T) {
 	claimed := claimByMeeting(t, ctx, store, map[int64]bool{aliceMeeting.ID: true, bobMeeting.ID: true})
 	aliceTask := claimed[aliceMeeting.ID]
 	bobTask := claimed[bobMeeting.ID]
-	if err := store.SaveTranscript(ctx, aliceTask.TaskID, aliceMeeting.ID, "Обсудили релиз. Алексей отвечает за тестирование."); err != nil {
+	if err := store.SaveTranscript(ctx, aliceTask.TaskID, aliceMeeting.ID, "Обсудили подготовку релиза. Алексей отвечает за тестирование."); err != nil {
 		t.Fatalf("SaveTranscript alice: %v", err)
 	}
 	if err := store.CompleteTask(ctx, aliceTask.TaskID, aliceMeeting.ID, "Релиз и тестирование согласованы."); err != nil {
