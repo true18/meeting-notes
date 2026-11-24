@@ -9,15 +9,15 @@ import (
 	"syscall"
 	"time"
 
-	"meeting-notes/internal/app"
-	"meeting-notes/internal/cli"
-	"meeting-notes/internal/config"
-	llmmock "meeting-notes/internal/llm/mock"
-	"meeting-notes/internal/repository/postgres"
-	speechmock "meeting-notes/internal/speech/mock"
-	"meeting-notes/internal/storage"
-	"meeting-notes/internal/worker"
-	"meeting-notes/migrations"
+	"github.com/true18/meeting-notes/internal/app"
+	"github.com/true18/meeting-notes/internal/cli"
+	"github.com/true18/meeting-notes/internal/config"
+	llmmock "github.com/true18/meeting-notes/internal/llm/mock"
+	"github.com/true18/meeting-notes/internal/repository/postgres"
+	speechmock "github.com/true18/meeting-notes/internal/speech/mock"
+	"github.com/true18/meeting-notes/internal/storage"
+	"github.com/true18/meeting-notes/internal/worker"
+	"github.com/true18/meeting-notes/migrations"
 )
 
 func main() {

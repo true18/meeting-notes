@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"meeting-notes/internal/domain"
-	"meeting-notes/internal/llm"
-	"meeting-notes/internal/storage"
+	"github.com/true18/meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/llm"
+	"github.com/true18/meeting-notes/internal/storage"
 )
 
 const (

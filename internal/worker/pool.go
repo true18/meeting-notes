@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"meeting-notes/internal/domain"
-	"meeting-notes/internal/llm"
-	"meeting-notes/internal/speech"
+	"github.com/true18/meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/llm"
+	"github.com/true18/meeting-notes/internal/speech"
 )
 
 // Repository is the task persistence boundary used by workers.

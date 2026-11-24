@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"meeting-notes/internal/domain"
-	"meeting-notes/internal/repository/postgres"
-	"meeting-notes/migrations"
+	"github.com/true18/meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/repository/postgres"
+	"github.com/true18/meeting-notes/migrations"
 )
 
 func TestPostgresLifecycleAndIsolation(t *testing.T) {

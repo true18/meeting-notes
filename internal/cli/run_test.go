@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/domain"
 )
 
 func TestExecuteCommands(t *testing.T) {

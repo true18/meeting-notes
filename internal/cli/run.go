@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/domain"
 )
 
 // Service contains user-facing application operations used by the CLI.

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/domain"
 )
 
 func TestChatUsesCurrentUserContext(t *testing.T) {

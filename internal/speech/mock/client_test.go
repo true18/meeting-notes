@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"meeting-notes/internal/speech"
+	"github.com/true18/meeting-notes/internal/speech"
 )
 
 func TestTranscribePreparedText(t *testing.T) {

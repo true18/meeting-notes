@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/domain"
 )
 
 // Store persists application data in PostgreSQL.

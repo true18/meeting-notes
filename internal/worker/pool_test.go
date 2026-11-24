@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"meeting-notes/internal/domain"
-	"meeting-notes/internal/speech"
+	"github.com/true18/meeting-notes/internal/domain"
+	"github.com/true18/meeting-notes/internal/speech"
 )
 
 func TestProcessSuccessAndErrors(t *testing.T) {

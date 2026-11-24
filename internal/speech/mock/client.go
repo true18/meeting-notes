@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"meeting-notes/internal/speech"
+	"github.com/true18/meeting-notes/internal/speech"
 )
 
 var (
