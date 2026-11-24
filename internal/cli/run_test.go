@@ -17,6 +17,7 @@ func TestExecuteCommands(t *testing.T) {
 		transcript: "meeting transcript",
 		summary:    "meeting summary",
 		answer:     "Алексей отвечает за тестирование.",
+		results:    []domain.SearchResult{{MeetingID: 2, Title: "meeting.txt", Status: domain.StatusCompleted, CreatedAt: time.Unix(1, 0), Snippet: "релиз"}},
 	}
 	handler := Handler{Service: service, Migrate: func(context.Context) error { return nil }, RunWorker: func(context.Context) error { return nil }}
 	tests := []struct {
@@ -25,10 +26,13 @@ func TestExecuteCommands(t *testing.T) {
 	}{
 		{command: Command{Name: "start", User: "alice"}, contains: "user_id=1"},
 		{command: Command{Name: "load", User: "alice", Arguments: []string{"meeting.txt"}}, contains: "meeting_id=2 task_id=3 status=created"},
+		{command: Command{Name: "list", User: "alice"}, contains: "id=2"},
 		{command: Command{Name: "status", User: "alice", MeetingID: 2}, contains: "meeting_id=2"},
 		{command: Command{Name: "get", User: "alice", MeetingID: 2}, contains: "meeting transcript"},
 		{command: Command{Name: "summary", User: "alice", MeetingID: 2}, contains: "meeting summary"},
+		{command: Command{Name: "find", User: "alice", Arguments: []string{"релиз"}}, contains: "snippet=\"релиз\""},
 		{command: Command{Name: "chat", User: "alice", Arguments: []string{"-meeting", "2", "Кто отвечает?"}}, contains: "Алексей"},
+		{command: Command{Name: "retry", User: "alice", MeetingID: 2}, contains: "status=created"},
 		{command: Command{Name: "migrate"}, contains: "migrations applied"},
 		{command: Command{Name: "worker"}, contains: "worker started"},
 	}
@@ -79,6 +83,7 @@ type fakeService struct {
 	transcript string
 	summary    string
 	answer     string
+	results    []domain.SearchResult
 	err        error
 }
 
@@ -99,7 +104,7 @@ func (f *fakeService) Summary(context.Context, string, int64) (string, error) {
 	return f.summary, f.err
 }
 func (f *fakeService) Find(context.Context, string, string) ([]domain.SearchResult, error) {
-	return nil, f.err
+	return f.results, f.err
 }
 func (f *fakeService) Chat(context.Context, string, string, *int64) (string, error) {
 	return f.answer, f.err
