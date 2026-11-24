@@ -31,7 +31,7 @@ func Parse(args []string) (Command, error) {
 		return Command{}, errors.New("command is required")
 	}
 	name := remaining[0]
-	known := map[string]bool{"start": true, "load": true, "list": true, "status": true, "get": true, "summary": true, "find": true, "chat": true, "worker": true, "migrate": true}
+	known := map[string]bool{"start": true, "load": true, "list": true, "status": true, "get": true, "summary": true, "find": true, "chat": true, "retry": true, "worker": true, "migrate": true}
 	if !known[name] {
 		return Command{}, fmt.Errorf("unknown command %q", name)
 	}
@@ -39,7 +39,7 @@ func Parse(args []string) (Command, error) {
 		return Command{}, errors.New("-user is required")
 	}
 	command := Command{Name: name, User: strings.TrimSpace(*user), Arguments: remaining[1:]}
-	if name == "status" || name == "get" || name == "summary" {
+	if name == "status" || name == "get" || name == "summary" || name == "retry" {
 		if len(command.Arguments) != 1 {
 			return Command{}, fmt.Errorf("%s requires one meeting ID", name)
 		}
