@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 )
@@ -70,25 +71,16 @@ func clearEnv(t *testing.T) {
 		"SPEECH_TIMEOUT", "LLM_TIMEOUT", "WORKER_POLL_INTERVAL", "SHUTDOWN_TIMEOUT",
 		"DATABASE_TIMEOUT", "PROCESSING_TIMEOUT", "MAX_UPLOAD_SIZE", "LOG_LEVEL",
 	} {
-		t.Setenv(key, "")
+		value, exists := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("Unsetenv(%s): %v", key, err)
+		}
+		t.Cleanup(func() {
+			if exists {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
 	}
-	// Empty values are meaningful, so restore defaults by removing values in subprocess-free tests.
-	for _, key := range []string{
-		"DATABASE_DSN", "STORAGE_DIR", "SPEECH_PROVIDER", "LLM_PROVIDER", "WORKERS",
-		"SPEECH_TIMEOUT", "LLM_TIMEOUT", "WORKER_POLL_INTERVAL", "SHUTDOWN_TIMEOUT",
-		"DATABASE_TIMEOUT", "PROCESSING_TIMEOUT", "MAX_UPLOAD_SIZE", "LOG_LEVEL",
-	} {
-		t.Setenv(key, defaultForTest(key))
-	}
-}
-
-func defaultForTest(key string) string {
-	defaults := map[string]string{
-		"DATABASE_DSN": "postgres://postgres:postgres@localhost:5432/meeting_notes?sslmode=disable",
-		"STORAGE_DIR":  "./data/uploads", "SPEECH_PROVIDER": "mock", "LLM_PROVIDER": "mock",
-		"WORKERS": "2", "SPEECH_TIMEOUT": "30s", "LLM_TIMEOUT": "30s",
-		"WORKER_POLL_INTERVAL": "1s", "SHUTDOWN_TIMEOUT": "15s", "DATABASE_TIMEOUT": "5s",
-		"PROCESSING_TIMEOUT": "70s", "MAX_UPLOAD_SIZE": "104857600", "LOG_LEVEL": "info",
-	}
-	return defaults[key]
 }
