@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"meeting-notes/internal/domain"
+	"meeting-notes/internal/llm"
 	"meeting-notes/internal/storage"
 )
 
@@ -40,15 +41,16 @@ type FileStore interface {
 type Service struct {
 	repo   Repository
 	files  FileStore
+	llm    llm.Client
 	logger *slog.Logger
 }
 
 // New creates an application service.
-func New(repo Repository, files FileStore, logger *slog.Logger) *Service {
+func New(repo Repository, files FileStore, llmClient llm.Client, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{repo: repo, files: files, logger: logger}
+	return &Service{repo: repo, files: files, llm: llmClient, logger: logger}
 }
 
 // StartUser creates or returns a user.
@@ -131,6 +133,34 @@ func (s *Service) Find(ctx context.Context, externalID, query string) ([]domain.
 		return nil, err
 	}
 	return s.repo.Search(ctx, user.ID, query, searchLimit)
+}
+
+// Chat answers a question using only bounded context owned by externalID.
+func (s *Service) Chat(ctx context.Context, externalID, question string, meetingID *int64) (string, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return "", fmt.Errorf("%w: question is empty", domain.ErrInvalidInput)
+	}
+	if s.llm == nil {
+		return "", errors.New("LLM client is not configured")
+	}
+	user, err := s.StartUser(ctx, externalID)
+	if err != nil {
+		return "", err
+	}
+	parts, err := s.repo.ChatContext(ctx, user.ID, meetingID, chatMeetingLimit)
+	if err != nil {
+		return "", err
+	}
+	contextText := strings.Join(parts, "\n")
+	if len(contextText) > 12000 {
+		contextText = contextText[:12000]
+	}
+	answer, err := s.llm.Answer(ctx, contextText, question)
+	if err != nil {
+		return "", fmt.Errorf("answer question: %w", err)
+	}
+	return answer, nil
 }
 
 // Retry requeues a failed user-owned meeting.

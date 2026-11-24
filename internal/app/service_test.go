@@ -11,7 +11,7 @@ import (
 
 func TestStartUser(t *testing.T) {
 	repo := &fakeRepository{user: domain.User{ID: 7, ExternalID: "alice"}}
-	service := New(repo, &fakeFiles{}, nil)
+	service := New(repo, &fakeFiles{}, nil, nil)
 	user, err := service.StartUser(context.Background(), " alice ")
 	if err != nil || user.ID != 7 || repo.lastExternalID != "alice" {
 		t.Fatalf("StartUser = %+v, %v", user, err)
@@ -28,7 +28,7 @@ func TestStartUser(t *testing.T) {
 func TestLoadMeetingCleansFileAfterTransactionError(t *testing.T) {
 	repo := &fakeRepository{user: domain.User{ID: 1}, errCreate: errors.New("transaction failed")}
 	files := &fakeFiles{saved: storage.SavedFile{Path: "/uploads/one.txt", Name: "one.txt", Format: "txt"}}
-	service := New(repo, files, nil)
+	service := New(repo, files, nil, nil)
 	if _, err := service.LoadMeeting(context.Background(), "alice", "source.txt"); err == nil {
 		t.Fatal("LoadMeeting returned nil error")
 	}
@@ -40,7 +40,7 @@ func TestLoadMeetingCleansFileAfterTransactionError(t *testing.T) {
 func TestLoadMeetingSuccess(t *testing.T) {
 	repo := &fakeRepository{user: domain.User{ID: 1}, created: domain.MeetingView{Meeting: domain.Meeting{ID: 11}, TaskID: 22, Status: domain.StatusCreated}}
 	files := &fakeFiles{saved: storage.SavedFile{Path: "/uploads/one.txt", Name: "one.txt", Format: "txt"}}
-	meeting, err := New(repo, files, nil).LoadMeeting(context.Background(), "alice", "source.txt")
+	meeting, err := New(repo, files, nil, nil).LoadMeeting(context.Background(), "alice", "source.txt")
 	if err != nil || meeting.ID != 11 || meeting.TaskID != 22 {
 		t.Fatalf("LoadMeeting = %+v, %v", meeting, err)
 	}
