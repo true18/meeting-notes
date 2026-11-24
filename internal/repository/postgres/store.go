@@ -185,7 +185,8 @@ func (s *Store) Search(ctx context.Context, userID int64, query string, limit in
 		JOIN transcripts tr ON tr.meeting_id = m.id
 		LEFT JOIN summaries s ON s.meeting_id = m.id
 		WHERE m.user_id = $1
-		  AND to_tsvector('simple', tr.text || ' ' || COALESCE(s.text, '')) @@ plainto_tsquery('simple', $2)
+		  AND (to_tsvector('simple', tr.text) @@ plainto_tsquery('simple', $2)
+		       OR to_tsvector('simple', COALESCE(s.text, '')) @@ plainto_tsquery('simple', $2))
 		ORDER BY m.created_at DESC, m.id DESC
 		LIMIT $3`, userID, query, limit)
 	if err != nil {
