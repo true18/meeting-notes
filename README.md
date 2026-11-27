@@ -17,7 +17,7 @@ CLI -> app.Service -> PostgreSQL repository / file storage / LLM
 - `internal/cli` — разбор команд и вывод без SQL;
 - `internal/app` — пользовательские сценарии;
 - `internal/repository/postgres` — параметризованные SQL-запросы и транзакции pgx;
-- `internal/storage` — потоковое атомарное копирование загруженных файлов;
+- `internal/storage` — потоковое атомарное копирование файлов через `os.Root`; операции root-relative ограничены управляемым каталогом и не позволяют переходить по `..` или внешним symlink. Это ограничение файловых операций через данный root, а не песочница всего процесса;
 - `internal/speech` и `internal/llm` — небольшие интерфейсы провайдеров;
 - `internal/worker` — ограниченный пул фоновой обработки;
 - `migrations` — встроенные SQL-миграции.
