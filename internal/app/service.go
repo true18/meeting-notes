@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/true18/meeting-notes/internal/domain"
 	"github.com/true18/meeting-notes/internal/llm"
@@ -152,15 +155,45 @@ func (s *Service) Chat(ctx context.Context, externalID, question string, meeting
 	if err != nil {
 		return "", err
 	}
-	contextText := strings.Join(parts, "\n")
-	if len(contextText) > 12000 {
-		contextText = contextText[:12000]
-	}
+	contextText := boundedContext(slices.Values(parts), 12000)
 	answer, err := s.llm.Answer(ctx, contextText, question)
 	if err != nil {
 		return "", fmt.Errorf("answer question: %w", err)
 	}
 	return answer, nil
+}
+
+func boundedContext(parts iter.Seq[string], limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	var result strings.Builder
+	remaining := limit
+	first := true
+	parts(func(part string) bool {
+		if !first {
+			if remaining == 0 {
+				return false
+			}
+			result.WriteByte('\n')
+			remaining--
+		}
+		first = false
+		if utf8.RuneCountInString(part) > remaining {
+			for _, r := range part {
+				if remaining == 0 {
+					return false
+				}
+				result.WriteRune(r)
+				remaining--
+			}
+			return false
+		}
+		result.WriteString(part)
+		remaining -= utf8.RuneCountInString(part)
+		return remaining > 0
+	})
+	return result.String()
 }
 
 // Retry requeues a failed user-owned meeting.
