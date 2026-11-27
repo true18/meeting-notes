@@ -310,6 +310,47 @@ func TestPostgresRecoveryFencesExpiredAttempt(t *testing.T) {
 	_ = active
 }
 
+func TestMigration003BackfillsExistingTask(t *testing.T) {
+	store := integrationStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	user, err := store.EnsureUser(ctx, "legacy-migration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meeting, err := store.CreateMeetingWithTask(ctx, user.ID, "legacy.txt", "/uploads/legacy.txt", "txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `UPDATE processing_tasks SET status='processing', started_at=NOW()-INTERVAL '2 minutes' WHERE meeting_id=$1`, meeting.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `DROP INDEX processing_tasks_lease_idx`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `ALTER TABLE processing_tasks DROP COLUMN lease_expires_at, DROP COLUMN attempt`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name='000003_task_leases.up.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations.Apply(ctx, store.Pool()); err != nil {
+		t.Fatalf("apply migration 003 over legacy data: %v", err)
+	}
+	var status string
+	var attempt int64
+	var startedAt, leaseExpiresAt *time.Time
+	if err := store.Pool().QueryRow(ctx, `SELECT status, attempt, started_at, lease_expires_at FROM processing_tasks WHERE meeting_id=$1`, meeting.ID).Scan(&status, &attempt, &startedAt, &leaseExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.StatusProcessing) || attempt != 0 || startedAt == nil || leaseExpiresAt == nil || !leaseExpiresAt.Equal(startedAt.Add(90*time.Second)) {
+		t.Fatalf("legacy task was not preserved/backfilled: status=%s attempt=%d started=%v lease=%v", status, attempt, startedAt, leaseExpiresAt)
+	}
+	if _, err := store.GetMeeting(ctx, user.ID, meeting.ID); err != nil {
+		t.Fatalf("existing meeting lost after migration: %v", err)
+	}
+}
+
 func claimByMeeting(t *testing.T, ctx context.Context, store *postgres.Store, meetings map[int64]bool) map[int64]domain.ClaimedTask {
 	t.Helper()
 	claimed := make(map[int64]domain.ClaimedTask)
