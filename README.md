@@ -151,6 +151,8 @@ Mock LLM возвращает подготовленную выжимку releas
 
 ## Тестирование
 
+Тесты polling, deadline, лимита параллелизма, shutdown и периодического recovery worker используют стабильный `testing/synctest` из Go 1.25; timeout mock LLM тоже проверяется с виртуальным временем. Они синхронизируются через `synctest.Wait()` и не ждут реальные интервалы. Тест timeout mock Speech остаётся обычным, потому что он открывает fixture через файловый root. PostgreSQL integration-тесты также выполняются отдельно с настоящей тестовой БД.
+
 ```bash
 go test ./...
 go test -race ./...

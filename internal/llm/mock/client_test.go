@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -37,11 +38,14 @@ func TestErrorsAndCancellation(t *testing.T) {
 	if _, err := client.Summarize(context.Background(), "[llm:error]"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	if _, err := client.Summarize(ctx, "[llm:timeout]"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("timeout = %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		if _, err := client.Summarize(ctx, "[llm:timeout]"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("timeout = %v", err)
+		}
+		synctest.Wait()
+	})
 	canceled, cancelNow := context.WithCancel(context.Background())
 	cancelNow()
 	if _, err := client.Answer(canceled, "text", "question"); !errors.Is(err, context.Canceled) {
