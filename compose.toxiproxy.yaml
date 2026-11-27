@@ -1,0 +1,33 @@
+services:
+  postgres-toxiproxy-test:
+    image: postgres:17.5-alpine3.21
+    environment:
+      POSTGRES_DB: meeting_notes_toxiproxy
+      POSTGRES_USER: meeting_test
+      POSTGRES_PASSWORD: meeting_test_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meeting_test -d meeting_notes_toxiproxy"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - toxiproxy_pgdata:/var/lib/postgresql/data
+    networks:
+      - toxiproxy-test
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    ports:
+      - "127.0.0.1:8474:8474"
+      - "127.0.0.1:18666:18666"
+    depends_on:
+      postgres-toxiproxy-test:
+        condition: service_healthy
+    networks:
+      - toxiproxy-test
+
+networks:
+  toxiproxy-test:
+
+volumes:
+  toxiproxy_pgdata:

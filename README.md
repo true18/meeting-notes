@@ -172,6 +172,21 @@ go test -v ./internal/repository/postgres
 
 Если `TEST_DATABASE_DSN` отсутствует, тест явно пропускается. Не направляйте его на production-базу. Unit-тесты проверяют ошибки клиентов, отмену, файловую очистку, CLI-коды и лимит worker concurrency; integration-тест проверяет транзакции, статусы, поиск и изоляцию пользователей.
 
+### Проверка сетевых отказов PostgreSQL
+
+Для отдельных сетевых integration-тестов используйте только выделенный локальный стенд. PostgreSQL не публикует порт на хосте; наружу через loopback доступны Toxiproxy API и его тестовый listener. Образы закреплены на PostgreSQL `17.5-alpine3.21` и Toxiproxy `2.13.0`.
+
+```bash
+docker compose -p meeting-notes-toxiproxy -f compose.toxiproxy.yaml up -d --wait
+export TEST_TOXIPROXY_URL='http://127.0.0.1:8474'
+export TEST_TOXIPROXY_DSN='postgres://meeting_test:meeting_test_only@127.0.0.1:18666/meeting_notes_toxiproxy?sslmode=disable'
+go test -count=1 -v -run '^TestToxiproxyPostgresResilience$' ./internal/repository/postgres
+unset TEST_TOXIPROXY_URL TEST_TOXIPROXY_DSN
+docker compose -p meeting-notes-toxiproxy -f compose.toxiproxy.yaml down -v
+```
+
+Тест создаёт собственные proxy и schema, проверяет обычный запрос, downstream-задержку 2000 мс с deadline 300 мс, `reset_peer`, восстановление того же `pgxpool`, а также отказ записи worker, периодический recovery и fencing новой попытки. Тест удаляет свои toxics, proxy и schema; команда `down -v` удаляет выделенную локальную БД. Без обеих `TEST_TOXIPROXY_*` переменных этот тест явно пропускается. Не подключайте этот стенд или тест к удалённой/пользовательской БД.
+
 ### Бенчмарки
 
 Бенчмарки измеряют ограничение контекста Chat (короткий, около 12 000 рун, большой и последовательность с ранней остановкой), а также выжимку и поиск ответа Mock LLM. Fixtures создаются до измеряемого цикла. Запуск:
