@@ -51,6 +51,46 @@ func TestProcessRequeuesOnShutdown(t *testing.T) {
 	}
 }
 
+func TestPeriodicRecoveryContinuesAfterErrorAndStops(t *testing.T) {
+	repo := &periodicRecoveryRepository{calls: make(chan int, 8)}
+	pool := New(repo, staticSpeech{}, staticLLM{}, testConfig(), nil)
+	pool.config.RecoveryInterval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pool.recoverPeriodically(ctx); close(done) }()
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-repo.calls:
+			if got != want {
+				t.Fatalf("recovery call = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("periodic recovery did not continue")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recovery goroutine did not stop")
+	}
+}
+
+type periodicRecoveryRepository struct {
+	fakeRepository
+	calls chan int
+	count atomic.Int64
+}
+
+func (r *periodicRecoveryRepository) RecoverStaleTasks(context.Context) (int64, error) {
+	n := int(r.count.Add(1))
+	r.calls <- n
+	if n == 1 {
+		return 0, errors.New("temporary database failure")
+	}
+	return 1, nil
+}
+
 func TestPoolLimitsConcurrencyAndStops(t *testing.T) {
 	repo := newQueueRepository(6)
 	release := make(chan struct{})
@@ -127,26 +167,26 @@ type fakeRepository struct {
 	requeued   string
 }
 
-func (*fakeRepository) ClaimTask(context.Context) (domain.ClaimedTask, bool, error) {
+func (*fakeRepository) ClaimTask(context.Context, time.Duration) (domain.ClaimedTask, bool, error) {
 	return domain.ClaimedTask{}, false, nil
 }
-func (f *fakeRepository) SaveTranscript(_ context.Context, _, _ int64, text string) error {
+func (f *fakeRepository) SaveTranscript(_ context.Context, _, _, _ int64, text string) error {
 	f.transcript = text
 	return nil
 }
-func (f *fakeRepository) CompleteTask(_ context.Context, _, _ int64, summary string) error {
+func (f *fakeRepository) CompleteTask(_ context.Context, _, _, _ int64, summary string) error {
 	f.summary = summary
 	return nil
 }
-func (f *fakeRepository) FailTask(_ context.Context, _ int64, message string) error {
+func (f *fakeRepository) FailTask(_ context.Context, _, _ int64, message string) error {
 	f.failed = message
 	return nil
 }
-func (f *fakeRepository) RequeueTask(_ context.Context, _ int64, message string) error {
+func (f *fakeRepository) RequeueTask(_ context.Context, _, _ int64, message string) error {
 	f.requeued = message
 	return nil
 }
-func (*fakeRepository) RecoverStaleTasks(context.Context, time.Time) (int64, error) { return 0, nil }
+func (*fakeRepository) RecoverStaleTasks(context.Context) (int64, error) { return 0, nil }
 
 type countingSpeech struct {
 	release chan struct{}
@@ -191,7 +231,7 @@ func newQueueRepository(count int) *queueRepository {
 	return repo
 }
 
-func (r *queueRepository) ClaimTask(context.Context) (domain.ClaimedTask, bool, error) {
+func (r *queueRepository) ClaimTask(context.Context, time.Duration) (domain.ClaimedTask, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.queue) == 0 {
@@ -205,17 +245,19 @@ func (r *queueRepository) ClaimTask(context.Context) (domain.ClaimedTask, bool, 
 	r.claimed[task.TaskID] = true
 	return task, true, nil
 }
-func (*queueRepository) SaveTranscript(context.Context, int64, int64, string) error { return nil }
-func (r *queueRepository) CompleteTask(context.Context, int64, int64, string) error {
+func (*queueRepository) SaveTranscript(context.Context, int64, int64, int64, string) error {
+	return nil
+}
+func (r *queueRepository) CompleteTask(context.Context, int64, int64, int64, string) error {
 	r.mu.Lock()
 	r.completed++
 	r.mu.Unlock()
 	r.done <- struct{}{}
 	return nil
 }
-func (*queueRepository) FailTask(context.Context, int64, string) error               { return nil }
-func (*queueRepository) RequeueTask(context.Context, int64, string) error            { return nil }
-func (*queueRepository) RecoverStaleTasks(context.Context, time.Time) (int64, error) { return 0, nil }
+func (*queueRepository) FailTask(context.Context, int64, int64, string) error    { return nil }
+func (*queueRepository) RequeueTask(context.Context, int64, int64, string) error { return nil }
+func (*queueRepository) RecoverStaleTasks(context.Context) (int64, error)        { return 0, nil }
 func (r *queueRepository) waitCompleted(t *testing.T, want int) {
 	t.Helper()
 	for i := 0; i < want; i++ {

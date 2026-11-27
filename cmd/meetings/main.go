@@ -69,6 +69,7 @@ func run(args []string) int {
 		Workers: cfg.Workers, PollInterval: cfg.WorkerPollInterval,
 		SpeechTimeout: cfg.SpeechTimeout, LLMTimeout: cfg.LLMTimeout,
 		ProcessingTimeout: cfg.ProcessingTimeout, CleanupTimeout: cfg.ShutdownTimeout,
+		RecoveryInterval: cfg.WorkerRecoveryInterval,
 	}, logger)
 
 	handler := cli.Handler{

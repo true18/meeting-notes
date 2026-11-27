@@ -19,6 +19,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo || cfg.StorageDir == "" || cfg.DatabaseDSN == "" {
 		t.Fatalf("incomplete defaults: %+v", cfg)
 	}
+	if cfg.WorkerRecoveryInterval != time.Minute {
+		t.Fatalf("recovery interval default = %v", cfg.WorkerRecoveryInterval)
+	}
 }
 
 func TestLoadEnvironment(t *testing.T) {
@@ -26,6 +29,7 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("WORKERS", "4")
 	t.Setenv("SPEECH_TIMEOUT", "2s")
 	t.Setenv("LLM_TIMEOUT", "3s")
+	t.Setenv("WORKER_RECOVERY_INTERVAL", "45s")
 	t.Setenv("MAX_UPLOAD_SIZE", "1234")
 	t.Setenv("LOG_LEVEL", "debug")
 	cfg, err := Load()
@@ -37,6 +41,9 @@ func TestLoadEnvironment(t *testing.T) {
 	}
 	if cfg.LogLevel != slog.LevelDebug {
 		t.Fatalf("LogLevel = %v", cfg.LogLevel)
+	}
+	if cfg.WorkerRecoveryInterval != 45*time.Second {
+		t.Fatalf("recovery interval = %v", cfg.WorkerRecoveryInterval)
 	}
 }
 
@@ -51,6 +58,9 @@ func TestLoadErrors(t *testing.T) {
 		{name: "speech provider", key: "SPEECH_PROVIDER", value: "external"},
 		{name: "llm provider", key: "LLM_PROVIDER", value: "external"},
 		{name: "duration", key: "SPEECH_TIMEOUT", value: "soon"},
+		{name: "recovery zero", key: "WORKER_RECOVERY_INTERVAL", value: "0s"},
+		{name: "recovery negative", key: "WORKER_RECOVERY_INTERVAL", value: "-1s"},
+		{name: "recovery syntax", key: "WORKER_RECOVERY_INTERVAL", value: "later"},
 		{name: "log level", key: "LOG_LEVEL", value: "verbose"},
 	}
 	for _, tt := range tests {
@@ -69,7 +79,7 @@ func clearEnv(t *testing.T) {
 	for _, key := range []string{
 		"DATABASE_DSN", "STORAGE_DIR", "SPEECH_PROVIDER", "LLM_PROVIDER", "WORKERS",
 		"SPEECH_TIMEOUT", "LLM_TIMEOUT", "WORKER_POLL_INTERVAL", "SHUTDOWN_TIMEOUT",
-		"DATABASE_TIMEOUT", "PROCESSING_TIMEOUT", "MAX_UPLOAD_SIZE", "LOG_LEVEL",
+		"DATABASE_TIMEOUT", "PROCESSING_TIMEOUT", "WORKER_RECOVERY_INTERVAL", "MAX_UPLOAD_SIZE", "LOG_LEVEL",
 	} {
 		value, exists := os.LookupEnv(key)
 		if err := os.Unsetenv(key); err != nil {

@@ -21,41 +21,44 @@ const (
 	defaultDatabaseTimeout   = 5 * time.Second
 	defaultMaxUploadSize     = int64(100 << 20)
 	defaultProcessingTimeout = 70 * time.Second
+	defaultRecoveryInterval  = time.Minute
 )
 
 // Config contains all runtime settings.
 type Config struct {
-	DatabaseDSN        string
-	StorageDir         string
-	SpeechProvider     string
-	LLMProvider        string
-	Workers            int
-	SpeechTimeout      time.Duration
-	LLMTimeout         time.Duration
-	WorkerPollInterval time.Duration
-	ShutdownTimeout    time.Duration
-	DatabaseTimeout    time.Duration
-	ProcessingTimeout  time.Duration
-	MaxUploadSize      int64
-	LogLevel           slog.Level
+	DatabaseDSN            string
+	StorageDir             string
+	SpeechProvider         string
+	LLMProvider            string
+	Workers                int
+	SpeechTimeout          time.Duration
+	LLMTimeout             time.Duration
+	WorkerPollInterval     time.Duration
+	ShutdownTimeout        time.Duration
+	DatabaseTimeout        time.Duration
+	ProcessingTimeout      time.Duration
+	WorkerRecoveryInterval time.Duration
+	MaxUploadSize          int64
+	LogLevel               slog.Level
 }
 
 // Load reads environment variables and returns validated settings.
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseDSN:        envString("DATABASE_DSN", defaultDatabaseDSN),
-		StorageDir:         envString("STORAGE_DIR", defaultStorageDir),
-		SpeechProvider:     envString("SPEECH_PROVIDER", "mock"),
-		LLMProvider:        envString("LLM_PROVIDER", "mock"),
-		Workers:            defaultWorkers,
-		SpeechTimeout:      defaultSpeechTimeout,
-		LLMTimeout:         defaultLLMTimeout,
-		WorkerPollInterval: defaultPollInterval,
-		ShutdownTimeout:    defaultShutdownTimeout,
-		DatabaseTimeout:    defaultDatabaseTimeout,
-		ProcessingTimeout:  defaultProcessingTimeout,
-		MaxUploadSize:      defaultMaxUploadSize,
-		LogLevel:           slog.LevelInfo,
+		DatabaseDSN:            envString("DATABASE_DSN", defaultDatabaseDSN),
+		StorageDir:             envString("STORAGE_DIR", defaultStorageDir),
+		SpeechProvider:         envString("SPEECH_PROVIDER", "mock"),
+		LLMProvider:            envString("LLM_PROVIDER", "mock"),
+		Workers:                defaultWorkers,
+		SpeechTimeout:          defaultSpeechTimeout,
+		LLMTimeout:             defaultLLMTimeout,
+		WorkerPollInterval:     defaultPollInterval,
+		ShutdownTimeout:        defaultShutdownTimeout,
+		DatabaseTimeout:        defaultDatabaseTimeout,
+		ProcessingTimeout:      defaultProcessingTimeout,
+		WorkerRecoveryInterval: defaultRecoveryInterval,
+		MaxUploadSize:          defaultMaxUploadSize,
+		LogLevel:               slog.LevelInfo,
 	}
 
 	var err error
@@ -78,6 +81,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ProcessingTimeout, err = envDuration("PROCESSING_TIMEOUT", cfg.ProcessingTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.WorkerRecoveryInterval, err = envDuration("WORKER_RECOVERY_INTERVAL", cfg.WorkerRecoveryInterval); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaxUploadSize, err = envInt64("MAX_UPLOAD_SIZE", cfg.MaxUploadSize); err != nil {
@@ -109,7 +115,7 @@ func (c Config) validate() error {
 		return fmt.Errorf("WORKERS must be greater than zero")
 	}
 	if c.SpeechTimeout <= 0 || c.LLMTimeout <= 0 || c.WorkerPollInterval <= 0 ||
-		c.ShutdownTimeout <= 0 || c.DatabaseTimeout <= 0 || c.ProcessingTimeout <= 0 {
+		c.ShutdownTimeout <= 0 || c.DatabaseTimeout <= 0 || c.ProcessingTimeout <= 0 || c.WorkerRecoveryInterval <= 0 {
 		return fmt.Errorf("timeouts and polling interval must be greater than zero")
 	}
 	if c.MaxUploadSize <= 0 {
