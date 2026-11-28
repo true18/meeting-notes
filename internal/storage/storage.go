@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var (
@@ -38,6 +39,9 @@ type SavedFile struct {
 type Store struct {
 	dir     string
 	maxSize int64
+	mu      sync.Mutex
+	root    *os.Root
+	closed  bool
 }
 
 // New creates a file store.
@@ -61,7 +65,8 @@ func (s *Store) Save(ctx context.Context, source string) (SavedFile, error) {
 	if !supportedFormats[ext] {
 		return SavedFile{}, fmt.Errorf("%w: %s", ErrUnsupportedFormat, ext)
 	}
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+	root, err := s.openRoot()
+	if err != nil {
 		return SavedFile{}, fmt.Errorf("create upload directory: %w", err)
 	}
 
@@ -71,16 +76,19 @@ func (s *Store) Save(ctx context.Context, source string) (SavedFile, error) {
 	}
 	defer sourceFile.Close()
 
-	temp, err := os.CreateTemp(s.dir, ".upload-*")
+	tempName, err := randomName(".tmp")
+	if err != nil {
+		return SavedFile{}, err
+	}
+	temp, err := root.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return SavedFile{}, fmt.Errorf("create temporary upload: %w", err)
 	}
-	tempName := temp.Name()
 	keep := false
 	defer func() {
 		_ = temp.Close()
 		if !keep {
-			_ = os.Remove(tempName)
+			_ = root.Remove(tempName)
 		}
 	}()
 
@@ -101,20 +109,96 @@ func (s *Store) Save(ctx context.Context, source string) (SavedFile, error) {
 	if err != nil {
 		return SavedFile{}, err
 	}
-	destination := filepath.Join(s.dir, name)
-	if err := os.Rename(tempName, destination); err != nil {
+	if err := root.Rename(tempName, name); err != nil {
 		return SavedFile{}, fmt.Errorf("commit upload: %w", err)
 	}
 	keep = true
-	return SavedFile{Path: destination, Name: info.Name(), Format: strings.TrimPrefix(ext, ".")}, nil
+	return SavedFile{Path: name, Name: info.Name(), Format: strings.TrimPrefix(ext, ".")}, nil
 }
 
 // Remove deletes an application-owned upload.
 func (s *Store) Remove(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	name, err := s.relativeName(path)
+	if err != nil {
+		return err
+	}
+	root, err := s.openRoot()
+	if err != nil {
+		return err
+	}
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove upload: %w", err)
 	}
 	return nil
+}
+
+// Open opens a stored file, accepting legacy absolute paths only inside the store.
+func (s *Store) Open(path string) (*os.File, error) {
+	name, err := s.relativeName(path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := s.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open stored upload: %w", err)
+	}
+	return file, nil
+}
+
+// Close releases the directory handle. Call it after workers stop using the store.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.root == nil {
+		return nil
+	}
+	err := s.root.Close()
+	s.root = nil
+	return err
+}
+
+func (s *Store) openRoot() (*os.Root, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, os.ErrClosed
+	}
+	if s.root != nil {
+		return s.root, nil
+	}
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	s.root = root
+	return root, nil
+}
+
+func (s *Store) relativeName(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		root, err := filepath.Abs(s.dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve storage directory: %w", err)
+		}
+		name, err := filepath.Rel(root, path)
+		if err != nil || name == "." || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("stored path is outside storage root")
+		}
+		path = name
+	}
+	name := filepath.Clean(path)
+	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid storage path")
+	}
+	return name, nil
 }
 
 func randomName(ext string) (string, error) {

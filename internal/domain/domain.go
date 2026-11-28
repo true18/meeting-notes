@@ -69,6 +69,7 @@ type MeetingView struct {
 // ClaimedTask contains everything a worker needs after atomically claiming a task.
 type ClaimedTask struct {
 	TaskID      int64
+	Attempt     int64
 	MeetingID   int64
 	UserID      int64
 	FilePath    string

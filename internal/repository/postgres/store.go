@@ -251,7 +251,7 @@ func (s *Store) ChatContext(ctx context.Context, userID int64, meetingID *int64,
 }
 
 // ClaimTask atomically claims one created task across concurrent workers and processes.
-func (s *Store) ClaimTask(ctx context.Context) (domain.ClaimedTask, bool, error) {
+func (s *Store) ClaimTask(ctx context.Context, lease time.Duration) (domain.ClaimedTask, bool, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return domain.ClaimedTask{}, false, fmt.Errorf("begin claim task: %w", err)
@@ -259,14 +259,14 @@ func (s *Store) ClaimTask(ctx context.Context) (domain.ClaimedTask, bool, error)
 	defer func() { _ = tx.Rollback(ctx) }()
 	var task domain.ClaimedTask
 	err = tx.QueryRow(ctx, `
-		SELECT t.id, m.id, m.user_id, m.file_path, m.file_format, m.title
+		SELECT t.id, t.attempt + 1, m.id, m.user_id, m.file_path, m.file_format, m.title
 		FROM processing_tasks t
 		JOIN meetings m ON m.id = t.meeting_id
 		WHERE t.status = $1
 		ORDER BY t.created_at, t.id
 		FOR UPDATE OF t SKIP LOCKED
 		LIMIT 1`, domain.StatusCreated).
-		Scan(&task.TaskID, &task.MeetingID, &task.UserID, &task.FilePath, &task.FileFormat, &task.MeetingName)
+		Scan(&task.TaskID, &task.Attempt, &task.MeetingID, &task.UserID, &task.FilePath, &task.FileFormat, &task.MeetingName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ClaimedTask{}, false, nil
 	}
@@ -275,8 +275,8 @@ func (s *Store) ClaimTask(ctx context.Context) (domain.ClaimedTask, bool, error)
 	}
 	result, err := tx.Exec(ctx, `
 		UPDATE processing_tasks
-		SET status=$1, error_message='', started_at=NOW(), finished_at=NULL, updated_at=NOW()
-		WHERE id=$2 AND status=$3`, domain.StatusProcessing, task.TaskID, domain.StatusCreated)
+		SET status=$1, attempt=$4, error_message='', started_at=NOW(), lease_expires_at=NOW()+($5 * INTERVAL '1 second'), finished_at=NULL, updated_at=NOW()
+		WHERE id=$2 AND status=$3`, domain.StatusProcessing, task.TaskID, domain.StatusCreated, task.Attempt, lease.Seconds())
 	if err != nil || result.RowsAffected() != 1 {
 		if err == nil {
 			err = errors.New("task changed while claiming")
@@ -290,8 +290,8 @@ func (s *Store) ClaimTask(ctx context.Context) (domain.ClaimedTask, bool, error)
 }
 
 // SaveTranscript atomically stores text and advances a processing task.
-func (s *Store) SaveTranscript(ctx context.Context, taskID, meetingID int64, text string) error {
-	return s.withTaskTransaction(ctx, taskID, domain.StatusProcessing, domain.StatusTranscribed, func(tx pgx.Tx) error {
+func (s *Store) SaveTranscript(ctx context.Context, taskID, attempt, meetingID int64, text string) error {
+	return s.withTaskTransaction(ctx, taskID, attempt, domain.StatusProcessing, domain.StatusTranscribed, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO transcripts(meeting_id, text) VALUES ($1, $2)
 			ON CONFLICT (meeting_id) DO UPDATE SET text=EXCLUDED.text, saved_at=NOW()`, meetingID, text)
@@ -300,8 +300,8 @@ func (s *Store) SaveTranscript(ctx context.Context, taskID, meetingID int64, tex
 }
 
 // CompleteTask atomically stores a summary and marks the task completed.
-func (s *Store) CompleteTask(ctx context.Context, taskID, meetingID int64, summary string) error {
-	return s.withTaskTransaction(ctx, taskID, domain.StatusTranscribed, domain.StatusCompleted, func(tx pgx.Tx) error {
+func (s *Store) CompleteTask(ctx context.Context, taskID, attempt, meetingID int64, summary string) error {
+	return s.withTaskTransaction(ctx, taskID, attempt, domain.StatusTranscribed, domain.StatusCompleted, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO summaries(meeting_id, text) VALUES ($1, $2)
 			ON CONFLICT (meeting_id) DO UPDATE SET text=EXCLUDED.text, saved_at=NOW()`, meetingID, summary)
@@ -309,7 +309,7 @@ func (s *Store) CompleteTask(ctx context.Context, taskID, meetingID int64, summa
 	})
 }
 
-func (s *Store) withTaskTransaction(ctx context.Context, taskID int64, from, to domain.TaskStatus, save func(pgx.Tx) error) error {
+func (s *Store) withTaskTransaction(ctx context.Context, taskID, attempt int64, from, to domain.TaskStatus, save func(pgx.Tx) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin result transaction: %w", err)
@@ -321,7 +321,8 @@ func (s *Store) withTaskTransaction(ctx context.Context, taskID int64, from, to 
 	result, err := tx.Exec(ctx, `
 		UPDATE processing_tasks
 		SET status=$1, updated_at=NOW(), finished_at=CASE WHEN $1='completed' THEN NOW() ELSE finished_at END
-		WHERE id=$2 AND status=$3`, to, taskID, from)
+		, lease_expires_at=CASE WHEN $1='completed' THEN NULL ELSE lease_expires_at END
+		WHERE id=$2 AND status=$3 AND attempt=$4`, to, taskID, from, attempt)
 	if err != nil {
 		return fmt.Errorf("advance task status: %w", err)
 	}
@@ -335,11 +336,11 @@ func (s *Store) withTaskTransaction(ctx context.Context, taskID int64, from, to 
 }
 
 // FailTask saves a processing error unless the task is already completed.
-func (s *Store) FailTask(ctx context.Context, taskID int64, message string) error {
+func (s *Store) FailTask(ctx context.Context, taskID, attempt int64, message string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE processing_tasks
-		SET status=$1, error_message=$2, updated_at=NOW(), finished_at=NOW()
-		WHERE id=$3 AND status <> $4`, domain.StatusFailed, message, taskID, domain.StatusCompleted)
+		SET status=$1, error_message=$2, updated_at=NOW(), finished_at=NOW(), lease_expires_at=NULL
+		WHERE id=$3 AND status IN ($4, $5) AND attempt=$6`, domain.StatusFailed, message, taskID, domain.StatusProcessing, domain.StatusTranscribed, attempt)
 	if err != nil {
 		return fmt.Errorf("fail task: %w", err)
 	}
@@ -347,11 +348,11 @@ func (s *Store) FailTask(ctx context.Context, taskID int64, message string) erro
 }
 
 // RequeueTask returns interrupted work to the durable queue.
-func (s *Store) RequeueTask(ctx context.Context, taskID int64, message string) error {
+func (s *Store) RequeueTask(ctx context.Context, taskID, attempt int64, message string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE processing_tasks
-		SET status=$1, error_message=$2, updated_at=NOW(), started_at=NULL, finished_at=NULL
-		WHERE id=$3 AND status IN ($4, $5)`, domain.StatusCreated, message, taskID, domain.StatusProcessing, domain.StatusTranscribed)
+		SET status=$1, error_message=$2, updated_at=NOW(), started_at=NULL, lease_expires_at=NULL, finished_at=NULL
+		WHERE id=$3 AND status IN ($4, $5) AND attempt=$6`, domain.StatusCreated, message, taskID, domain.StatusProcessing, domain.StatusTranscribed, attempt)
 	if err != nil {
 		return fmt.Errorf("requeue task: %w", err)
 	}
@@ -359,11 +360,11 @@ func (s *Store) RequeueTask(ctx context.Context, taskID int64, message string) e
 }
 
 // RecoverStaleTasks requeues tasks whose lease predates cutoff.
-func (s *Store) RecoverStaleTasks(ctx context.Context, cutoff time.Time) (int64, error) {
+func (s *Store) RecoverStaleTasks(ctx context.Context) (int64, error) {
 	result, err := s.pool.Exec(ctx, `
 		UPDATE processing_tasks
-		SET status=$1, error_message='recovered after interrupted worker', updated_at=NOW(), started_at=NULL
-		WHERE status IN ($2, $3) AND started_at < $4`, domain.StatusCreated, domain.StatusProcessing, domain.StatusTranscribed, cutoff)
+		SET status=$1, error_message='recovered after interrupted worker', updated_at=NOW(), started_at=NULL, lease_expires_at=NULL
+		WHERE status IN ($2, $3) AND lease_expires_at < NOW()`, domain.StatusCreated, domain.StatusProcessing, domain.StatusTranscribed)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale tasks: %w", err)
 	}

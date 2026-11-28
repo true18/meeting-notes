@@ -48,13 +48,28 @@ func run(args []string) int {
 	defer store.Close()
 
 	files := storage.New(cfg.StorageDir, cfg.MaxUploadSize)
-	speechClient := speechmock.New()
+	defer func() {
+		if err := files.Close(); err != nil {
+			logger.Error("close file storage", "error", err)
+		}
+	}()
+	speechClient, err := speechmock.NewWithRoot(cfg.StorageDir)
+	if err != nil {
+		logger.Error("open speech storage", "error", err)
+		return 1
+	}
+	defer func() {
+		if err := speechClient.Close(); err != nil {
+			logger.Error("close speech storage", "error", err)
+		}
+	}()
 	llmClient := llmmock.New()
 	service := app.New(store, files, llmClient, logger)
 	pool := worker.New(store, speechClient, llmClient, worker.Config{
 		Workers: cfg.Workers, PollInterval: cfg.WorkerPollInterval,
 		SpeechTimeout: cfg.SpeechTimeout, LLMTimeout: cfg.LLMTimeout,
 		ProcessingTimeout: cfg.ProcessingTimeout, CleanupTimeout: cfg.ShutdownTimeout,
+		RecoveryInterval: cfg.WorkerRecoveryInterval,
 	}, logger)
 
 	handler := cli.Handler{

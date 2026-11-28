@@ -57,16 +57,16 @@ func TestPostgresLifecycleAndIsolation(t *testing.T) {
 	claimed := claimByMeeting(t, ctx, store, map[int64]bool{aliceMeeting.ID: true, bobMeeting.ID: true})
 	aliceTask := claimed[aliceMeeting.ID]
 	bobTask := claimed[bobMeeting.ID]
-	if err := store.SaveTranscript(ctx, aliceTask.TaskID, aliceMeeting.ID, "Обсудили подготовку релиза. Алексей отвечает за тестирование."); err != nil {
+	if err := store.SaveTranscript(ctx, aliceTask.TaskID, aliceTask.Attempt, aliceMeeting.ID, "Обсудили подготовку релиза. Алексей отвечает за тестирование."); err != nil {
 		t.Fatalf("SaveTranscript alice: %v", err)
 	}
-	if err := store.CompleteTask(ctx, aliceTask.TaskID, aliceMeeting.ID, "Релиз и тестирование согласованы."); err != nil {
+	if err := store.CompleteTask(ctx, aliceTask.TaskID, aliceTask.Attempt, aliceMeeting.ID, "Релиз и тестирование согласованы."); err != nil {
 		t.Fatalf("CompleteTask alice: %v", err)
 	}
-	if err := store.SaveTranscript(ctx, bobTask.TaskID, bobMeeting.ID, "Обсудили бюджет клиента."); err != nil {
+	if err := store.SaveTranscript(ctx, bobTask.TaskID, bobTask.Attempt, bobMeeting.ID, "Обсудили бюджет клиента."); err != nil {
 		t.Fatalf("SaveTranscript bob: %v", err)
 	}
-	if err := store.CompleteTask(ctx, bobTask.TaskID, bobMeeting.ID, "Бюджет обсуждён."); err != nil {
+	if err := store.CompleteTask(ctx, bobTask.TaskID, bobTask.Attempt, bobMeeting.ID, "Бюджет обсуждён."); err != nil {
 		t.Fatalf("CompleteTask bob: %v", err)
 	}
 
@@ -104,11 +104,11 @@ func TestPostgresLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failedTask, found, err := store.ClaimTask(ctx)
+	failedTask, found, err := store.ClaimTask(ctx, time.Minute)
 	if err != nil || !found || failedTask.MeetingID != failedMeeting.ID {
 		t.Fatalf("ClaimTask failed scenario = %+v, %t, %v", failedTask, found, err)
 	}
-	if err := store.FailTask(ctx, failedTask.TaskID, "speech unavailable"); err != nil {
+	if err := store.FailTask(ctx, failedTask.TaskID, failedTask.Attempt, "speech unavailable"); err != nil {
 		t.Fatal(err)
 	}
 	status, err := store.GetMeeting(ctx, alice.ID, failedMeeting.ID)
@@ -146,7 +146,7 @@ func TestPostgresConcurrentClaimsAreUnique(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			task, found, err := store.ClaimTask(ctx)
+			task, found, err := store.ClaimTask(ctx, time.Minute)
 			if err != nil {
 				errs <- err
 				return
@@ -176,11 +176,186 @@ func TestPostgresConcurrentClaimsAreUnique(t *testing.T) {
 	}
 }
 
+func TestPostgresRecoveryFencesExpiredAttempt(t *testing.T) {
+	store := integrationStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	user, err := store.EnsureUser(ctx, "fencing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeMeeting, err := store.CreateMeetingWithTask(ctx, user.ID, "active.txt", "/uploads/active.txt", "txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, found, err := store.ClaimTask(ctx, time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim active = %v, %v", found, err)
+	}
+	if recovered, err := store.RecoverStaleTasks(ctx); err != nil || recovered != 0 {
+		t.Fatalf("recovery touched active lease: recovered=%d err=%v", recovered, err)
+	}
+
+	staleMeeting, err := store.CreateMeetingWithTask(ctx, user.ID, "stale.txt", "/uploads/stale.txt", "txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, found, err := store.ClaimTask(ctx, time.Minute)
+	if err != nil || !found || first.MeetingID != staleMeeting.ID {
+		t.Fatalf("claim first = %+v %v %v", first, found, err)
+	}
+	if _, err := store.Pool().Exec(ctx, `UPDATE processing_tasks SET lease_expires_at=NOW()-INTERVAL '1 second' WHERE id=$1`, first.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan int64, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n, err := store.RecoverStaleTasks(ctx)
+			results <- n
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	var total int64
+	for n := range results {
+		total += n
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent recovery: %v", err)
+		}
+	}
+	if total != 1 {
+		t.Fatalf("recovered rows = %d, want 1", total)
+	}
+	if n, err := store.RecoverStaleTasks(ctx); err != nil || n != 0 {
+		t.Fatalf("repeat recovery = %d, %v", n, err)
+	}
+	second, found, err := store.ClaimTask(ctx, time.Minute)
+	if err != nil || !found || second.TaskID != first.TaskID || second.Attempt != first.Attempt+1 {
+		t.Fatalf("claim second = %+v found=%v err=%v", second, found, err)
+	}
+
+	if err := store.SaveTranscript(ctx, first.TaskID, first.Attempt, first.MeetingID, "stale transcript"); err == nil {
+		t.Fatal("stale transcript accepted")
+	}
+	if err := store.CompleteTask(ctx, first.TaskID, first.Attempt, first.MeetingID, "stale summary"); err == nil {
+		t.Fatal("stale summary accepted")
+	}
+	if err := store.FailTask(ctx, first.TaskID, first.Attempt, "stale failure"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequeueTask(ctx, first.TaskID, first.Attempt, "stale requeue"); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var transcriptCount int
+	if err := store.Pool().QueryRow(ctx, `SELECT status FROM processing_tasks WHERE id=$1`, first.TaskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Pool().QueryRow(ctx, `SELECT count(*) FROM transcripts WHERE meeting_id=$1`, first.MeetingID).Scan(&transcriptCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.StatusProcessing) || transcriptCount != 0 {
+		t.Fatalf("stale attempt changed task: status=%s transcripts=%d", status, transcriptCount)
+	}
+	if err := store.SaveTranscript(ctx, second.TaskID, second.Attempt, second.MeetingID, "current transcript"); err != nil {
+		t.Fatalf("save current transcript: %v", err)
+	}
+	if err := store.CompleteTask(ctx, second.TaskID, second.Attempt, second.MeetingID, "current summary"); err != nil {
+		t.Fatalf("complete current attempt: %v", err)
+	}
+	var savedTranscript, savedSummary string
+	if err := store.Pool().QueryRow(ctx, `SELECT text FROM transcripts WHERE meeting_id=$1`, second.MeetingID).Scan(&savedTranscript); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Pool().QueryRow(ctx, `SELECT text FROM summaries WHERE meeting_id=$1`, second.MeetingID).Scan(&savedSummary); err != nil {
+		t.Fatal(err)
+	}
+	if savedTranscript != "current transcript" || savedSummary != "current summary" {
+		t.Fatalf("saved stale results: transcript=%q summary=%q", savedTranscript, savedSummary)
+	}
+	terminal, err := store.CreateMeetingWithTask(ctx, user.ID, "terminal.txt", "/uploads/terminal.txt", "txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `UPDATE processing_tasks SET status=CASE WHEN meeting_id=$1 THEN 'failed' ELSE 'completed' END, lease_expires_at=NOW()-INTERVAL '1 second' WHERE meeting_id IN ($1,$2)`, terminal.ID, activeMeeting.ID); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := store.RecoverStaleTasks(ctx); err != nil || recovered != 0 {
+		t.Fatalf("recovery changed terminal tasks: %d, %v", recovered, err)
+	}
+	var terminalStatuses []string
+	rows, err := store.Pool().Query(ctx, `SELECT status FROM processing_tasks WHERE meeting_id IN ($1,$2) ORDER BY meeting_id`, terminal.ID, activeMeeting.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		terminalStatuses = append(terminalStatuses, value)
+	}
+	rows.Close()
+	if len(terminalStatuses) != 2 || terminalStatuses[0] != string(domain.StatusCompleted) || terminalStatuses[1] != string(domain.StatusFailed) {
+		t.Fatalf("terminal statuses changed: %v", terminalStatuses)
+	}
+	_ = active
+}
+
+func TestMigration003BackfillsExistingTask(t *testing.T) {
+	store := integrationStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	user, err := store.EnsureUser(ctx, "legacy-migration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meeting, err := store.CreateMeetingWithTask(ctx, user.ID, "legacy.txt", "/uploads/legacy.txt", "txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `UPDATE processing_tasks SET status='processing', started_at=NOW()-INTERVAL '2 minutes' WHERE meeting_id=$1`, meeting.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `DROP INDEX processing_tasks_lease_idx`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `ALTER TABLE processing_tasks DROP COLUMN lease_expires_at, DROP COLUMN attempt`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE name='000003_task_leases.up.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations.Apply(ctx, store.Pool()); err != nil {
+		t.Fatalf("apply migration 003 over legacy data: %v", err)
+	}
+	var status string
+	var attempt int64
+	var startedAt, leaseExpiresAt *time.Time
+	if err := store.Pool().QueryRow(ctx, `SELECT status, attempt, started_at, lease_expires_at FROM processing_tasks WHERE meeting_id=$1`, meeting.ID).Scan(&status, &attempt, &startedAt, &leaseExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.StatusProcessing) || attempt != 0 || startedAt == nil || leaseExpiresAt == nil || !leaseExpiresAt.Equal(startedAt.Add(90*time.Second)) {
+		t.Fatalf("legacy task was not preserved/backfilled: status=%s attempt=%d started=%v lease=%v", status, attempt, startedAt, leaseExpiresAt)
+	}
+	if _, err := store.GetMeeting(ctx, user.ID, meeting.ID); err != nil {
+		t.Fatalf("existing meeting lost after migration: %v", err)
+	}
+}
+
 func claimByMeeting(t *testing.T, ctx context.Context, store *postgres.Store, meetings map[int64]bool) map[int64]domain.ClaimedTask {
 	t.Helper()
 	claimed := make(map[int64]domain.ClaimedTask)
 	for range meetings {
-		task, found, err := store.ClaimTask(ctx)
+		task, found, err := store.ClaimTask(ctx, time.Minute)
 		if err != nil || !found {
 			t.Fatalf("ClaimTask = %+v, %t, %v", task, found, err)
 		}
